@@ -28,11 +28,24 @@ bool unavailable_unhide_pending = false;
 // Whether the Home Assistant values on display are stale; see base.h.
 bool api_stale = false;
 
+// Child lock - blocks user actions; see base.h.
+bool child_lock_blocking = false;
+
 // Loop time of the last setting or binding received from the Blueprint; see base.h.
 uint32_t blueprint_last_setting_ms = 0;
 
 // Fire a Home Assistant event for NSPanel HA Blueprint
 void fire_ha_event(const std::string &type, std::map<std::string, std::string> data) {
+  // Child lock: drop what a user can trigger, keep system events and the notification page
+  if (child_lock_blocking and
+      (type == "button_click" or type == "action_call" or type == "generic" or type == "picker_selected")) {
+    const auto page_it = data.find("page");
+    if (page_it == data.end() or page_it->second != "notification") {
+      ESP_LOGD(TAG_COMPONENT_BASE, "Child lock active: '%s' event not sent", type.c_str());
+      return;
+    }  // if (not the notification page)
+  }  // if (child_lock_blocking)
+
   // Add device name and type to the event data
   data["device_name"] = cached_device_name;
   data["type"] = type;

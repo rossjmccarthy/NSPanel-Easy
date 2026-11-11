@@ -234,6 +234,15 @@ extern bool unavailable_unhide_pending;
 extern bool api_stale;
 
 /**
+ * @brief Child lock (add-on `nspanel_esphome_addon_child_lock`): while true, user actions are not reported.
+ *
+ * fire_ha_event() drops `button_click`, `action_call`, `generic` and `picker_selected` events, and the hardware
+ * buttons and home page taps are ignored (so relays do not switch either). System events (`boot`, `page_changed`,
+ * `version`) and the notification page are not affected. Always false unless the add-on sets it.
+ */
+extern bool child_lock_blocking;
+
+/**
  * @brief Loop time (ms) of the last setting or binding received from the Blueprint.
  *
  * Zero until the first one arrives. While the Blueprint keeps sending, a full settings push is in

@@ -1,0 +1,198 @@
+#####################################################################################################
+##### NSPanel Easy (fork) - CHILD LOCK add-on                                                   #####
+#####################################################################################################
+##### The panel starts LOCKED. While locked:                                                    #####
+#####   - nothing a user does (touch, hardware buttons) is sent to Home Assistant                #####
+#####   - the hardware buttons do not switch the relays                                          #####
+#####   - the display is kept on the home page / screensaver (notifications are still shown)     #####
+##### HOLD BOTH hardware buttons for `child_lock_hold_time` to unlock (beep). It locks again    #####
+##### by itself after `Child Lock Relock Time` seconds without interaction, or when the display #####
+##### goes to sleep. Holding both buttons again locks it right away.                            #####
+##### The gate itself lives in components/nspanel_easy/base.cpp (fire_ha_event) and in the     #####
+##### hardware button handlers (esphome/nspanel_esphome_hw_buttons.yaml).                       #####
+#####################################################################################################
+---
+substitutions:
+  ##############################
+  ## Change only in your      ##
+  ## local yaml substitutions ##
+  ##############################
+  child_lock_hold_time: 2s      # Both buttons must be held this long
+  child_lock_relock_s: "30"     # Default seconds of inactivity before locking again (adjustable from HA)
+  tone_child_lock_unlock: "unlock:d=16,o=6,b=200:c,e,g"
+  tone_child_lock_lock: "lock:d=16,o=6,b=200:g,c"
+  TAG_ADDON_CHILD_LOCK: nspanel.addon.child_lock
+
+esphome:
+  build_flags:
+    - -D NSPANEL_EASY_ADDON_CHILD_LOCK
+
+globals:
+  - id: child_lock_locked      # true = locked (only meaningful while the feature is enabled)
+    type: bool
+    restore_value: false       # Always locked after a reboot or power cut
+    initial_value: 'true'
+  - id: child_lock_swallow     # true after unlocking, until both buttons are released again
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+switch:
+  - platform: template
+    id: child_lock_enabled
+    name: Child Lock
+    icon: mdi:lock-outline
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lambda: |-
+          id(child_lock_locked) = true;
+          id(child_lock_swallow) = false;
+      - script.execute: child_lock_apply
+    on_turn_off:
+      - script.stop: child_lock_relock_timer
+      - lambda: |-
+          id(child_lock_locked) = false;
+          id(child_lock_swallow) = false;
+      - script.execute: child_lock_apply
+
+number:
+  - platform: template
+    id: child_lock_relock_time
+    name: Child Lock Relock Time
+    icon: mdi:timer-lock-outline
+    entity_category: config
+    unit_of_measurement: s
+    min_value: 5
+    max_value: 600
+    step: 5
+    initial_value: ${child_lock_relock_s}
+    restore_value: true
+    optimistic: true
+    mode: box
+
+button:
+  - platform: template
+    name: Child Lock Lock Now
+    icon: mdi:lock
+    on_press:
+      - script.execute:
+          id: child_lock_lock
+          beep: true
+
+binary_sensor:
+  - platform: template     # Status for Home Assistant: on = locked
+    id: child_lock_state
+    name: Child Lock Active
+    icon: mdi:lock
+
+  - platform: template     # Both hardware buttons held for child_lock_hold_time
+    id: child_lock_combo
+    internal: true
+    lambda: |-
+      return id(left_button).state and id(right_button).state;
+    filters:
+      - delayed_on: ${child_lock_hold_time}
+    on_press:
+      - if:
+          condition:
+            lambda: 'return id(child_lock_enabled).state and !id(child_lock_locked);'
+          then:
+            - script.execute:        # Already unlocked: the same gesture locks again at once
+                id: child_lock_lock
+                beep: true
+            - lambda: 'id(child_lock_swallow) = true;'
+            - script.execute: child_lock_apply
+          else:
+            - script.execute: child_lock_unlock
+
+interval:
+  - interval: 100ms
+    then:
+      - lambda: |-
+          // After unlocking, the buttons are still held: keep ignoring them until both are released
+          if (id(child_lock_swallow) and !id(left_button).state and !id(right_button).state) {
+            id(child_lock_swallow) = false;
+            child_lock_apply->execute();
+          }
+
+script:
+  # Recomputes what is blocked, publishes the state and, when locked, brings the display back to a safe page
+  - id: child_lock_apply
+    mode: restart
+    then:
+      - lambda: |-
+          const bool enabled = id(child_lock_enabled).state;
+          const bool locked = enabled and id(child_lock_locked);
+          child_lock_blocking = enabled and (id(child_lock_locked) or id(child_lock_swallow));
+          id(child_lock_state).publish_state(locked);
+          ESP_LOGD("${TAG_ADDON_CHILD_LOCK}", "enabled=%s locked=%s blocking=%s", YESNO(enabled), YESNO(locked),
+                   YESNO(child_lock_blocking));
+          if (!locked or !system_flags.boot_completed or current_page_id >= PAGE_COUNT) return;
+          // Only these pages are allowed while locked (notifications must stay readable)
+          if (current_page_id == home_page_id or current_page_id == get_page_id("screensaver") or
+              current_page_id == get_page_id("boot") or current_page_id == get_page_id("notification")) return;
+          ESP_LOGD("${TAG_ADDON_CHILD_LOCK}", "Locked: leaving page '%s'", page_names[current_page_id]);
+          goto_page->execute(home_page_id);
+
+  - id: child_lock_unlock
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(child_lock_enabled).state) return;
+          id(child_lock_locked) = false;
+          id(child_lock_swallow) = true;  // The buttons are still held down
+          buzzer->play("${tone_child_lock_unlock}");
+          ESP_LOGI("${TAG_ADDON_CHILD_LOCK}", "Unlocked");
+      - script.execute: child_lock_apply
+      - script.execute: child_lock_relock_timer
+      - lambda: |-
+          if (current_page_id == get_page_id("screensaver")) wakeup->execute(true);
+          else timer_reset_all->execute();
+
+  - id: child_lock_lock
+    mode: restart
+    parameters:
+      beep: bool
+    then:
+      - script.stop: child_lock_relock_timer
+      - lambda: |-
+          if (!id(child_lock_enabled).state) return;
+          if (beep and !id(child_lock_locked)) buzzer->play("${tone_child_lock_lock}");
+          id(child_lock_locked) = true;
+          ESP_LOGI("${TAG_ADDON_CHILD_LOCK}", "Locked");
+      - script.execute: child_lock_apply
+
+  - id: child_lock_relock_timer
+    mode: restart
+    then:
+      - delay: !lambda 'return (uint32_t) (id(child_lock_relock_time).state * 1000);'
+      - script.execute:
+          id: child_lock_lock
+          beep: true
+
+  # Any interaction while unlocked (touch, button, wake-up) restarts the inactivity timer
+  - id: !extend timer_reset_all
+    then:
+      - lambda: |-
+          if (id(child_lock_enabled).state and !id(child_lock_locked)) child_lock_relock_timer->execute();
+
+  # When the display falls asleep while unlocked, lock silently; when locked, bounce off any forbidden page
+  - id: !extend page_change
+    then:
+      - lambda: |-
+          if (id(child_lock_enabled).state and !id(child_lock_locked) and
+              current_page_id == get_page_id("screensaver")) {
+            child_lock_lock->execute(false);
+            return;
+          }
+          child_lock_apply->execute();
+
+  - id: !extend stop_all
+    then:
+      - lambda: |-
+          child_lock_apply->stop();
+          child_lock_unlock->stop();
+          child_lock_lock->stop();
+          child_lock_relock_timer->stop();
+...

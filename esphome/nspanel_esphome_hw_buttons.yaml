@@ -81,6 +81,10 @@ binary_sensor:
         invalid_cooldown: ${_left_long_click_cooldown}
         then:
           - lambda: |-
+              if (child_lock_blocking) {  // Child lock add-on: ignore (no event, no relay)
+                ESP_LOGD("${TAG_HW_BUTTONS}", "Left button - Long click ignored (child lock)");
+                return;
+              }
               ESP_LOGV("${TAG_HW_BUTTONS}", "Left button - Long click detected");
               button_left_press_long->execute();
               ha_button->execute(page_names[current_page_id], "hw_bt_left", "long_click");
@@ -106,6 +110,10 @@ binary_sensor:
         invalid_cooldown: ${invalid_cooldown}
         then:
           - lambda: |-
+              if (child_lock_blocking) {  // Child lock add-on: ignore (no event, no relay)
+                ESP_LOGD("${TAG_HW_BUTTONS}", "Left button - Short click ignored (child lock)");
+                return;
+              }
               ESP_LOGV("${TAG_HW_BUTTONS}", "Left button - Short click detected");
               button_left_press_short->execute();
               ha_button->execute(page_names[current_page_id], "hw_bt_left", "short_click");
@@ -151,6 +159,10 @@ binary_sensor:
         invalid_cooldown: ${_right_long_click_cooldown}
         then:
           - lambda: |-
+              if (child_lock_blocking) {  // Child lock add-on: ignore (no event, no relay)
+                ESP_LOGD("${TAG_HW_BUTTONS}", "Right button - Long click ignored (child lock)");
+                return;
+              }
               ESP_LOGV("${TAG_HW_BUTTONS}", "Right button - Long click detected");
               button_right_press_long->execute();
               ha_button->execute(page_names[current_page_id], "hw_bt_right", "long_click");
@@ -168,6 +180,10 @@ binary_sensor:
         invalid_cooldown: ${invalid_cooldown}
         then:
           - lambda: |-
+              if (child_lock_blocking) {  // Child lock add-on: ignore (no event, no relay)
+                ESP_LOGD("${TAG_HW_BUTTONS}", "Right button - Short click ignored (child lock)");
+                return;
+              }
               ESP_LOGV("${TAG_HW_BUTTONS}", "Right button - Short click detected");
               button_right_press_short->execute();
               ha_button->execute(page_names[current_page_id], "hw_bt_right", "short_click");
